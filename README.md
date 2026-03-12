@@ -27,7 +27,7 @@ Pure PyTorch implementations of Vision Transformer (ViT) architectures with mult
 - `vitl_rope.py` - ViT-L with Rotary Position Embeddings (RoPE)
 
 **Key Features:**
-- 4 architecture variants for different use cases
+- Architecture variants for different use cases
 - Learnable vs. rotary position embeddings
 - Complete transformer blocks with attention and FFN
 - Initialization strategies for stable training
