@@ -10,6 +10,7 @@ arch/
 ├── clip/             # CLIP: Contrastive Language-Image Pre-training
 ├── llava/            # Large Language and Vision Assistant (multimodal)
 ├── dataops/          # PyTorch Dataset templates
+├── train/            # Training utilities and examples
 └── README.md         # This file
 ```
 
@@ -228,15 +229,160 @@ batch = ds_vl[0]  # Dict with pixel_values, input_ids, labels
 
 ---
 
+### 5. **Training Utilities (`train/`)**
+
+Production-ready training loop template, model evaluation, and visualization tools.
+
+**Files:**
+- `train_template.py` - Reusable training loop with W&B integration
+- `gradcam.py` - Attention map visualization using GradCAM
+- `gradcam_example.py` - Complete example: load model, generate and visualize attention
+- `vit-exp.py` - Example training and inference script
+
+**Key Features:**
+- Automatic device detection (CUDA, MPS, CPU)
+- Weights & Biases integration for experiment tracking
+- Learning rate scheduling (cosine annealing with warmup)
+- Gradient accumulation and mixed precision training
+- Checkpoint management and resumption
+- Early stopping based on validation metrics
+- Configurable via `TrainingConfig` dataclass
+
+**Components:**
+- `TrainingConfig` - Dataclass with all hyperparameters (reproducible, JSON serializable)
+- `Trainer` - Main training class with full training pipeline
+
+**When to Use:**
+- Training any PyTorch model with standard supervised learning
+- Organizing experiments and comparing runs (via W&B)
+- Implementing best practices without starting from scratch
+- Monitoring training progress in real-time
+
+**Quick Start:**
+```python
+from train.train_template import TrainingConfig, Trainer
+from vit.vitb import ViTB
+from torch.utils.data import DataLoader
+
+# Configure training
+config = TrainingConfig(
+    project_name="my_project",
+    experiment_name="vitb_baseline",
+    epochs=100,
+    batch_size=32,
+    learning_rate=1e-4,
+    use_wandb=True,  # Track in Weights & Biases
+)
+
+# Create model and trainer
+model = ViTB(num_classes=1000)
+trainer = Trainer(model, config)
+
+# Train!
+results = trainer.train(train_loader, val_loader)
+```
+
+**Configuration Example:**
+```python
+config = TrainingConfig(
+    # Project setup
+    project_name="vision_experiments",
+    experiment_name="vitb_imagenet_warmup10",
+    seed=42,
+
+    # Training
+    epochs=300,
+    batch_size=256,
+    learning_rate=5e-4,
+    warmup_epochs=20,
+
+    # Optimization
+    gradient_accumulation_steps=4,
+    max_grad_norm=1.0,
+    use_mixed_precision=True,
+
+    # Checkpointing
+    checkpoint_dir="checkpoints",
+    save_every_n_epochs=10,
+    patience=50,
+
+    # Logging
+    use_wandb=True,
+    wandb_entity="my_team",
+)
+```
+
+**Features in Detail:**
+
+| Feature | Description |
+|---------|-------------|
+| **Device Management** | Auto-detects CUDA, MPS (Apple Silicon), CPU |
+| **W&B Integration** | Real-time metrics, plots, hyperparameter comparison |
+| **LR Scheduling** | Cosine annealing with linear warmup |
+| **Gradient Accumulation** | Simulate larger batch sizes with limited memory |
+| **Mixed Precision** | Faster training with AMP on CUDA |
+| **Checkpoint Saving** | Save best models, resume interrupted training |
+| **Early Stopping** | Stop training when validation loss plateaus |
+| **Metric Tracking** | Loss, accuracy, learning rate history |
+
+---
+
 ## 🚀 Quick Examples
 
-### Example 1: Image Classification Pipeline
+### Example 1: Production Training with W&B (Recommended)
 
 ```python
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from vit.vitb import ViTB
+from vit.device import get_device
+from dataops.vision_dataset import VisionDataset
+from train.train_template import TrainingConfig, Trainer
+
+# 1. Create datasets
+train_transform = transforms.Compose([
+    transforms.RandomRotation(10),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+])
+ds_train = VisionDataset(root="data/train", mode="train", train_transform=train_transform)
+ds_val = VisionDataset(root="data/val", mode="val")
+
+# 2. Create dataloaders
+train_loader = DataLoader(ds_train, batch_size=64, shuffle=True, num_workers=4)
+val_loader = DataLoader(ds_val, batch_size=128, num_workers=4)
+
+# 3. Configure training
+config = TrainingConfig(
+    project_name="imagenet_experiments",
+    experiment_name="vitb_baseline",
+    epochs=300,
+    batch_size=64,
+    learning_rate=1e-4,
+    warmup_epochs=20,
+    use_wandb=True,  # Enable W&B tracking
+)
+
+# 4. Create model and trainer
+model = ViTB(img_size=224, patch_size=16, num_classes=ds_train.num_classes)
+trainer = Trainer(model, config)
+
+# 5. Train (full pipeline with checkpoints, early stopping, etc.)
+results = trainer.train(train_loader, val_loader)
+
+# 6. Resume from checkpoint if interrupted
+# results = trainer.train(train_loader, val_loader, resume_from="checkpoints/checkpoint_epoch050_best.pt")
+```
+
+### Example 2: Simple Training Loop (Minimal)
+
+```python
+import torch
+from torch.utils.data import DataLoader
+from torchvision import transforms
+from vit.vitb import ViTB
+from vit.device import get_device
 from dataops.vision_dataset import VisionDataset
 
 # 1. Create dataset
@@ -250,8 +396,9 @@ ds = VisionDataset(root="data/imagenet", mode="train", train_transform=train_tra
 # 2. Create dataloader
 loader = DataLoader(ds, batch_size=32, shuffle=True, num_workers=4)
 
-# 3. Create model
-model = ViTB(img_size=224, patch_size=16, num_classes=ds.num_classes)
+# 3. Create model on correct device
+device = get_device()
+model = ViTB(img_size=224, patch_size=16, num_classes=ds.num_classes).to(device)
 
 # 4. Training loop
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
@@ -259,6 +406,11 @@ criterion = torch.nn.CrossEntropyLoss()
 
 for epoch in range(10):
     for images, labels in loader:
+        # Move data to device
+        images = images.to(device)
+        labels = labels.to(device)
+
+        # Forward + backward
         logits = model(images)
         loss = criterion(logits, labels)
         loss.backward()
@@ -340,15 +492,85 @@ for batch in loader:
 
 ## 📋 Feature Comparison
 
-| Feature | ViT | CLIP | LLaVA | DataOps |
-|---------|-----|------|-------|---------|
-| **Type** | Vision Encoder | Image-Text Model | Multimodal | Data Loading |
-| **Input** | Images | Images + Text | Images + Text | Various (folder, CSV, JSON) |
-| **Output** | Image Features | Normalized Embeddings | Text | Dict/Tuple of Tensors |
-| **Pretrained** | Ready for ONNX export | HuggingFace CLIP models | HuggingFace integration | N/A (template) |
-| **Trainable** | Yes | Yes (contrastive loss) | Vision frozen, LM trainable | N/A |
-| **Use Case** | Feature extraction, classification | Zero-shot, similarity, retrieval | Image-to-text understanding | Data preprocessing |
-| **Embedding Dim** | 768, 1024 | 512, 768 | Varies | N/A |
+| Feature | ViT | CLIP | LLaVA | DataOps | Training |
+|---------|-----|------|-------|---------|----------|
+| **Type** | Vision Encoder | Image-Text Model | Multimodal | Data Loading | Training Loop |
+| **Input** | Images | Images + Text | Images + Text | Various (folder, CSV, JSON) | Model + DataLoaders |
+| **Output** | Image Features | Normalized Embeddings | Text | Dict/Tuple of Tensors | Checkpoints + Metrics |
+| **Pretrained** | Ready for ONNX export | HuggingFace CLIP models | HuggingFace integration | N/A (template) | N/A |
+| **Trainable** | Yes | Yes (contrastive loss) | Vision frozen, LM trainable | N/A | Any model |
+| **Use Case** | Feature extraction, classification | Zero-shot, similarity, retrieval | Image-to-text understanding | Data preprocessing | Training & monitoring |
+| **Key Feature** | Architecture | Contrastive learning | Multimodal fusion | Dataset abstraction | W&B + checkpointing |
+| **Embedding Dim** | 768, 1024 | 512, 768 | Varies | N/A | N/A |
+
+**GradCAM (Attention Visualization):**
+
+Generic Gradient-weighted Class Activation Mapping that works with **any model, any image size, any input type**.
+
+```bash
+# Command-line usage (simplest!)
+uv run utils/gradcam_viz.py \
+    --checkpoint model.pt \
+    --images data/test/ \
+    --output visualizations/
+
+# Works with ANY image size - no resizing needed!
+uv run utils/gradcam_viz.py \
+    --checkpoint model.pt \
+    --images image_512x512.jpg \
+    --num-classes 2 \
+    --alpha 0.5
+```
+
+**Python API (fully generic):**
+
+```python
+from utils.gradcam_generic import GradCAM, VisualizationConfig
+import torch
+
+# Works with ANY model - auto-detects architecture
+model = YourModel()
+model.load_state_dict(torch.load("model.pt"))
+
+# Create visualizer (fully automatic, no configuration needed)
+viz = GradCAM(model, device="cuda")
+
+# Works with ANY image size!
+images_192 = torch.randn(4, 3, 192, 192)  # Any size!
+images_512 = torch.randn(4, 3, 512, 512)  # Any size!
+
+# Generate attention maps (same code for any size)
+maps_192 = viz.generate_attention_maps(images_192)
+maps_512 = viz.generate_attention_maps(images_512)
+
+# Customize visualization
+config = VisualizationConfig(
+    cmap="hot",
+    alpha=0.4,
+    dpi=150,
+)
+
+# Save with custom config
+viz.save_visualizations(
+    images_512,
+    maps_512,
+    output_dir="results",
+    config=config,
+)
+```
+
+**Features:**
+- ✅ **Model-agnostic** - Works with ViT, CNN, hybrid, custom architectures
+- ✅ **Size-agnostic** - Any image size (192×192, 224×224, 512×512, etc.)
+- ✅ **Input-agnostic** - RGB, grayscale, multi-channel, any format
+- ✅ **Auto-detection** - No manual configuration needed
+- ✅ **Flexible output** - Save individual maps, overlays, comparisons
+
+**Outputs:**
+- `original_*.png` - Input images
+- `heatmap_*.png` - Pure attention maps
+- `overlay_*.png` - Heatmap overlaid on original
+- `comparison_*.png` - Side-by-side visualization with colorbar
 
 ---
 
@@ -402,9 +624,50 @@ python llava/llava.py
 python dataops/vision_dataset.py
 python dataops/language_dataset.py
 python dataops/vl_dataset.py
+
+# Test Training Loop (with dummy data)
+python train/train_template.py
+
+# Test GradCAM Generic (with dummy model - works with any size!)
+python utils/gradcam_generic.py
 ```
 
 All tests skip gracefully if dependencies (PyTorch, Pillow) aren't installed.
+
+### Generic GradCAM: Works with ANY Model & Image Size
+
+The generic GradCAM is the recommended approach - it auto-detects your model architecture and works with any image size:
+
+```bash
+# Simple command-line usage
+uv run utils/gradcam_viz.py \
+    --checkpoint checkpoints/model_best.pt \
+    --images data/test_images/ \
+    --output visualizations/
+
+# Works with ANY image size (no explicit size parameter needed!)
+uv run utils/gradcam_viz.py \
+    --checkpoint model.pt \
+    --images image_512x512.jpg \
+    --num-classes 2 \
+    --alpha 0.5
+
+# Custom colormap and output settings
+uv run utils/gradcam_viz.py \
+    --checkpoint model.pt \
+    --images data/ \
+    --output results/ \
+    --cmap "hot" \
+    --dpi 200 \
+    --alpha 0.3
+```
+
+**Key advantages over old version:**
+- ✅ No need to specify image size
+- ✅ Works with any model (auto-detects ViT, CNN, etc.)
+- ✅ Handles RGB, grayscale, multi-channel inputs
+- ✅ Cleaner error messages
+- ✅ Flexible visualization options
 
 ---
 
@@ -412,22 +675,24 @@ All tests skip gracefully if dependencies (PyTorch, Pillow) aren't installed.
 
 All code in this repository follows consistent patterns:
 
-- **Docstrings:** Google-style with type hints
-- **Type Hints:** Full typing from `typing` module
-- **Tensor Shapes:** Inline comments showing dimensions
-- **Deterministic:** Sorted loading for reproducibility
-- **Configurable:** Sensible defaults with extensive optional parameters
-- **Self-Contained:** Each file works independently
+- **Docstrings:** Google-style with comprehensive examples and parameter documentation
+- **Type Hints:** Full typing from `typing` module for all function signatures
+- **Tensor Shapes:** Inline comments showing dimensions (e.g., `# (B, N, D)`)
+- **Deterministic:** Reproducible training with seed management and sorted loading
+- **Configurable:** Sensible defaults with extensive optional parameters via dataclasses
+- **Self-Contained:** Each module works independently with no hidden dependencies
+- **Device-Aware:** Automatic device detection and handling throughout
 
-Example pattern:
+Example patterns:
+
+**Model Definition:**
 ```python
 def forward(
     self,
     input_ids: torch.Tensor,
     images: Optional[torch.Tensor] = None,
 ) -> Dict[str, torch.Tensor]:
-    """
-    Forward pass description.
+    """Forward pass with detailed tensor shapes.
 
     Args:
         input_ids: [batch_size, seq_len] - text token IDs
@@ -440,9 +705,76 @@ def forward(
     # x: (B, N, D)
 ```
 
+**Training Configuration:**
+```python
+@dataclass
+class TrainingConfig:
+    """Dataclass-based config (JSON serializable, reproducible)."""
+    epochs: int = 100
+    batch_size: int = 32
+    learning_rate: float = 1e-4
+    # ... all hyperparameters
+
+config = TrainingConfig(epochs=300)
+config.save("experiment.json")  # Reproducible
+```
+
+**Device Handling:**
+```python
+from vit.device import get_device
+
+device = get_device()  # Auto-detects CUDA, MPS, CPU
+model = MyModel().to(device)
+x = torch.randn(...).to(device)
+```
+
 ---
 
 ## 🔧 Common Tasks
+
+### Visualizing Model Attention with Generic GradCAM
+
+Works with **any image size, any model**:
+
+```bash
+# Simplest usage - just provide checkpoint and images!
+uv run utils/gradcam_viz.py --checkpoint model.pt --images data/test/
+```
+
+**Python API:**
+
+```python
+from utils.gradcam_generic import GradCAM
+import torch
+
+# Load ANY model
+model = YourModel()
+model.load_state_dict(torch.load("model.pt"))
+
+# Create visualizer (auto-detects architecture)
+viz = GradCAM(model, device="cuda")
+
+# Works with ANY image size (no need to specify!)
+images = torch.randn(4, 3, 512, 512)  # Any size!
+
+# Generate attention maps
+attention_maps = viz.generate_attention_maps(images, target_class=0)
+
+# Save visualizations
+viz.save_visualizations(
+    images,
+    attention_maps,
+    output_dir="visualizations",
+    target_class=0,
+)
+```
+
+**What this shows:**
+- Which image regions the model focuses on for each class
+- Attention intensity heatmaps overlaid on inputs
+- Works with any image size without resizing
+- Helps debug model behavior and identify failure cases
+- Supports RGB, grayscale, and multi-channel inputs
 
 ### Loading a Pretrained ViT Model
 
@@ -492,6 +824,8 @@ class CustomImageDataset(VisionDataset):
 - **[CLIP](clip/doc.md)** - Contrastive learning, zero-shot classification, multimodal alignment
 - **[LLaVA](llava/doc.md)** - Multimodal architecture, training, and real-world examples
 - **[DataOps](dataops/doc.md)** - Dataset templates, formats, and usage patterns
+- **[Training Template](train/train_template.py)** - Production training loop with W&B integration (inline documented)
+- **[GradCAM Visualization](utils/gradcam.md)** - Comprehensive guide to model attention visualization (any model, any size)
 
 ---
 
@@ -499,11 +833,29 @@ class CustomImageDataset(VisionDataset):
 
 This repository is organized for clarity and reusability. When adding new components:
 
-1. Follow the existing code style (Google docstrings, type hints)
-2. Include smoke tests with synthetic data in `__main__`
-3. Add comprehensive module docstrings
-4. Document tensor shapes inline
-5. Update relevant `doc.md` files
+1. **Follow the existing code style:**
+   - Google-style docstrings with comprehensive examples
+   - Full type hints on all function signatures
+   - Inline comments for tensor shapes
+
+2. **Test thoroughly:**
+   - Include smoke tests with synthetic data in `__main__`
+   - No real data files required for testing
+
+3. **Document comprehensively:**
+   - Module-level docstrings explaining purpose and usage
+   - Inline shape comments for tensor operations
+   - Update relevant `doc.md` or README sections
+
+4. **Keep device handling in mind:**
+   - Use `get_device()` for device detection
+   - Move tensors and models to the same device
+   - Test on multiple device types (CUDA, MPS, CPU) when possible
+
+5. **Make it configurable:**
+   - Use dataclasses for configs
+   - Provide sensible defaults
+   - Make configs JSON serializable for reproducibility
 
 ---
 
@@ -527,4 +879,4 @@ Check individual files for license information.
 
 **Last Updated:** 2026-03-12
 
-A comprehensive toolkit for modern PyTorch modeling and training.
+A comprehensive toolkit for modern PyTorch modeling and training. Includes architecture implementations, training utilities, and dataset templates with W&B integration and production-ready best practices.

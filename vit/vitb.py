@@ -29,6 +29,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
+from .device import get_device
 
 
 class PatchEmbedding(nn.Module):
@@ -54,6 +55,7 @@ class PatchEmbedding(nn.Module):
         patch_size (int): Size of each patch (height and width). Default: 16
         in_channels (int): Number of input channels (3 for RGB). Default: 3
         embed_dim (int): Output embedding dimension. Default: 768
+        device: Device to create the layer on. Default: None (CPU)
 
     Attributes:
         n_patches (int): Total number of patches = (img_size // patch_size)²
@@ -61,7 +63,7 @@ class PatchEmbedding(nn.Module):
         proj (nn.Conv2d): Convolutional projection kernel_size=patch_size, stride=patch_size
     """
 
-    def __init__(self, img_size=224, patch_size=16, in_channels=3, embed_dim=768):
+    def __init__(self, img_size=224, patch_size=16, in_channels=3, embed_dim=768, device=None):
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
@@ -70,6 +72,8 @@ class PatchEmbedding(nn.Module):
         self.proj = nn.Conv2d(
             in_channels, embed_dim, kernel_size=patch_size, stride=patch_size
         )
+        if device is not None:
+            self.proj = self.proj.to(device)
 
     def forward(self, x):
         """
@@ -386,8 +390,10 @@ class ViTB(nn.Module):
         mlp_ratio=4.0,
         drop_rate=0.0,
         attn_drop_rate=0.0,
+        device=None,
     ):
         super().__init__()
+        self.device = get_device(device)
         self.embed_dim = embed_dim
         self.n_patches = (img_size // patch_size) ** 2
 
@@ -397,14 +403,15 @@ class ViTB(nn.Module):
             patch_size=patch_size,
             in_channels=in_channels,
             embed_dim=embed_dim,
+            device=self.device,
         )
 
         # Class token
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim, device=self.device))
 
         # Positional embedding (includes cls token position)
         self.pos_embed = nn.Parameter(
-            torch.zeros(1, self.n_patches + 1, embed_dim)
+            torch.zeros(1, self.n_patches + 1, embed_dim, device=self.device)
         )
         self.pos_drop = nn.Dropout(drop_rate)
 
@@ -514,6 +521,7 @@ class ViTB(nn.Module):
 
 if __name__ == "__main__":
     # Test the model
+    device = get_device()
     model = ViTB(
         img_size=224,
         patch_size=16,
@@ -522,13 +530,13 @@ if __name__ == "__main__":
         embed_dim=768,
         depth=12,
         n_heads=12,
-    )
+    ).to(device)
 
-    # Create random input
-    x = torch.randn(2, 3, 224, 224)
+    # Create random input on the same device
+    x = torch.randn(2, 3, 224, 224).to(device)
 
     # Forward pass
     output = model(x)
     print(f"Input shape: {x.shape}")
     print(f"Output shape: {output.shape}")
-    print(f"Model created successfully!")
+    print(f"Model created successfully on {device}!")

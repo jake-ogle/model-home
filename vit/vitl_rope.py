@@ -34,6 +34,7 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 import math
+from .device import get_device
 
 
 def precompute_freqs_cis(dim, seq_len, device, theta=10000.0):
@@ -64,7 +65,7 @@ def apply_rotary_emb(xq, xk, freqs_cis):
 class PatchEmbedding(nn.Module):
     """Convert image to patch embeddings."""
 
-    def __init__(self, img_size=224, patch_size=16, in_channels=3, embed_dim=1024):
+    def __init__(self, img_size=224, patch_size=16, in_channels=3, embed_dim=1024, device=None):
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
@@ -73,6 +74,8 @@ class PatchEmbedding(nn.Module):
         self.proj = nn.Conv2d(
             in_channels, embed_dim, kernel_size=patch_size, stride=patch_size
         )
+        if device is not None:
+            self.proj = self.proj.to(device)
 
     def forward(self, x):
         # x: (B, C, H, W)
@@ -257,8 +260,10 @@ class ViTLRoPE(nn.Module):
         mlp_ratio=4.0,
         drop_rate=0.0,
         attn_drop_rate=0.0,
+        device=None,
     ):
         super().__init__()
+        self.device = get_device(device)
         self.embed_dim = embed_dim
         self.n_patches = (img_size // patch_size) ** 2
 
@@ -268,10 +273,11 @@ class ViTLRoPE(nn.Module):
             patch_size=patch_size,
             in_channels=in_channels,
             embed_dim=embed_dim,
+            device=self.device,
         )
 
         # Class token
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim, device=self.device))
 
         # No positional embedding - using RoPE instead
         self.pos_drop = nn.Dropout(drop_rate)
@@ -332,6 +338,7 @@ class ViTLRoPE(nn.Module):
 
 if __name__ == "__main__":
     # Test the model
+    device = get_device()
     model = ViTLRoPE(
         img_size=224,
         patch_size=16,
@@ -340,13 +347,13 @@ if __name__ == "__main__":
         embed_dim=1024,
         depth=24,
         n_heads=16,
-    )
+    ).to(device)
 
-    # Create random input
-    x = torch.randn(2, 3, 224, 224)
+    # Create random input on the same device
+    x = torch.randn(2, 3, 224, 224).to(device)
 
     # Forward pass
     output = model(x)
     print(f"Input shape: {x.shape}")
     print(f"Output shape: {output.shape}")
-    print(f"Model created successfully!")
+    print(f"Model created successfully on {device}!")
