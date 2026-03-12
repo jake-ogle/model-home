@@ -7,6 +7,7 @@ A curated collection of clean, production-ready PyTorch implementations for mode
 ```
 arch/
 ├── vit/              # Vision Transformer architectures
+├── clip/             # CLIP: Contrastive Language-Image Pre-training
 ├── llava/            # Large Language and Vision Assistant (multimodal)
 ├── dataops/          # PyTorch Dataset templates
 └── README.md         # This file
@@ -60,7 +61,72 @@ logits = model(x)  # (8, 1000)
 
 ---
 
-### 2. **LLaVA: Large Language and Vision Assistant (`llava/`)**
+### 2. **CLIP: Contrastive Language-Image Pre-training (`clip/`)**
+
+Foundation model that learns visual representations from natural language supervision by aligning image and text embeddings in a shared space.
+
+**Files:**
+- `clip.py` - CLIP model implementation with vision and text encoders
+- `doc.md` - Comprehensive CLIP documentation
+
+**Key Features:**
+- Vision Encoder: Patch-based Vision Transformer for images
+- Text Encoder: GPT-style transformer with causal attention masking
+- Contrastive Learning: InfoNCE loss for image-text alignment
+- L2 Normalization: Converts to cosine similarity in shared embedding space
+- Learnable Temperature: Balances match difficulty during training
+- HuggingFace Integration: Load pretrained OpenAI CLIP models
+
+**Components:**
+- `ResidualAttentionBlock` - Pre-LayerNorm transformer block
+- `VisionEncoder` - Self-contained ViT for images (49 patches + class token)
+- `TextEncoder` - GPT-style transformer with context_length=77
+- `CLIP` - Main model combining both encoders with projections
+
+**When to Use:**
+- Zero-shot image classification
+- Image-text similarity scoring
+- Cross-modal retrieval (find images matching text)
+- Vision encoder for multimodal models (e.g., LLaVA)
+- Foundation model for downstream vision-language tasks
+
+**Quick Start:**
+```python
+from clip.clip import CLIP
+import torch
+
+# Create model
+model = CLIP(embed_dim=512, vision_width=768, transformer_width=512)
+model.eval()
+
+# Encode images and text
+images = torch.randn(8, 3, 224, 224)
+input_ids = torch.randint(0, 49408, (8, 77))
+
+with torch.no_grad():
+    image_features = model.encode_image(images)      # (8, 512), normalized
+    text_features = model.encode_text(input_ids)     # (8, 512), normalized
+
+    # Compute similarity scores
+    similarities = image_features @ text_features.T  # (8, 8)
+```
+
+**Training Example:**
+```python
+# Full forward pass with loss
+outputs = model(images, input_ids)
+loss = outputs["loss"]
+
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+loss.backward()
+optimizer.step()
+```
+
+📖 [Detailed Documentation](clip/doc.md)
+
+---
+
+### 3. **LLaVA: Large Language and Vision Assistant (`llava/`)**
 
 Multimodal architecture combining vision encoders with language models for image-to-text understanding and generation.
 
@@ -109,7 +175,7 @@ outputs = model(input_ids=input_ids, images=images)
 
 ---
 
-### 3. **Data Loading Templates (`dataops/`)**
+### 4. **Data Loading Templates (`dataops/`)**
 
 Production-ready PyTorch Dataset implementations for common data modalities.
 
@@ -274,14 +340,15 @@ for batch in loader:
 
 ## 📋 Feature Comparison
 
-| Feature | ViT | LLaVA | DataOps |
-|---------|-----|-------|---------|
-| **Type** | Vision Encoder | Multimodal | Data Loading |
-| **Input** | Images | Images + Text | Various (folder, CSV, JSON) |
-| **Output** | Image Features | Text | Dict/Tuple of Tensors |
-| **Pretrained** | Ready for ONNX export | HuggingFace integration | N/A (template) |
-| **Trainable** | Yes | Vision frozen, LM trainable | N/A |
-| **Use Case** | Feature extraction, classification | Image-to-text understanding | Data preprocessing |
+| Feature | ViT | CLIP | LLaVA | DataOps |
+|---------|-----|------|-------|---------|
+| **Type** | Vision Encoder | Image-Text Model | Multimodal | Data Loading |
+| **Input** | Images | Images + Text | Images + Text | Various (folder, CSV, JSON) |
+| **Output** | Image Features | Normalized Embeddings | Text | Dict/Tuple of Tensors |
+| **Pretrained** | Ready for ONNX export | HuggingFace CLIP models | HuggingFace integration | N/A (template) |
+| **Trainable** | Yes | Yes (contrastive loss) | Vision frozen, LM trainable | N/A |
+| **Use Case** | Feature extraction, classification | Zero-shot, similarity, retrieval | Image-to-text understanding | Data preprocessing |
+| **Embedding Dim** | 768, 1024 | 512, 768 | Varies | N/A |
 
 ---
 
@@ -324,6 +391,9 @@ Each module includes smoke tests with synthetic data (no real files required):
 ```bash
 # Test Vision Transformers
 python vit/vitb.py
+
+# Test CLIP
+python clip/clip.py
 
 # Test LLaVA
 python llava/llava.py
@@ -419,6 +489,7 @@ class CustomImageDataset(VisionDataset):
 ## 📖 Documentation
 
 - **[Vision Transformers](vit/doc.md)** - Detailed ViT architecture guide with position embedding comparison
+- **[CLIP](clip/doc.md)** - Contrastive learning, zero-shot classification, multimodal alignment
 - **[LLaVA](llava/doc.md)** - Multimodal architecture, training, and real-world examples
 - **[DataOps](dataops/doc.md)** - Dataset templates, formats, and usage patterns
 
@@ -446,9 +517,10 @@ Check individual files for license information.
 
 - **PyTorch:** https://pytorch.org
 - **Vision Transformer Paper:** https://arxiv.org/abs/2010.11929
+- **CLIP Paper:** https://arxiv.org/abs/2103.00020
 - **RoPE (Rotary Position Embeddings):** https://arxiv.org/abs/2104.09864
 - **LLaVA Paper:** https://arxiv.org/abs/2304.08485
-- **CLIP:** https://github.com/openai/CLIP
+- **OpenAI CLIP GitHub:** https://github.com/openai/CLIP
 - **HuggingFace Hub:** https://huggingface.co
 
 ---
